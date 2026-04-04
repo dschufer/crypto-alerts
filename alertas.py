@@ -5,8 +5,8 @@ import time
 from datetime import datetime
 
 # ── config ─────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAGB3qDR97G0cGcSD7g9HzbPle5pDe2m-3M")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "1259871459")
 SYMBOLS          = ["BTCUSDT", "ETHUSDT"]
 TIMEFRAMES       = [
     {"label": "1W", "binance": "1w", "weight": 6},
