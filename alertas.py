@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 # ── config ─────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAGB3qDR97G0cGcSD7g9HzbPle5pDe2m-3M")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAHDGFQ_Lzcoz4tiyO2VXTuCeDEyoijW9rg")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "1259871459")
 SYMBOLS          = ["BTCUSDT", "ETHUSDT"]
 TIMEFRAMES       = [
