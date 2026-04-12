@@ -180,7 +180,6 @@ def main():
             print(f"  Score: {score:+d}  |  {label}")
  
             in_zone  = abs(score) >= SCORE_THRESHOLD
-            #was_zone = last_state.get(coin) is not None and abs(last_state[coin]) >= SCORE_THRESHOLD
             was_zone = False
  
             if in_zone and not was_zone:
