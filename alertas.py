@@ -3,26 +3,34 @@ import os
 import json
 import time
 from datetime import datetime
-
+ 
 # ── config ─────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAFch-hO_zvEG0YtcguV6mlf4wldQuuTTOo")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8608919442")
-SYMBOLS          = ["BTCUSDT", "ETHUSDT"]
-TIMEFRAMES       = [
-    {"label": "1W", "bybit": "W",   "weight": 6},
-    {"label": "1D", "bybit": "D",   "weight": 5},
-    {"label": "4H", "bybit": "240", "weight": 4},
-    {"label": "1H", "bybit": "60",  "weight": 3},
-    {"label": "15M","bybit": "15",  "weight": 2},
-    {"label": "5M", "bybit": "5",   "weight": 1},
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+ 
+# Kraken usa pares distintos: XBT = BTC
+SYMBOLS = [
+    {"name": "BTC", "kraken": "XBTUSD"},
+    {"name": "ETH", "kraken": "ETHUSD"},
 ]
+ 
+# Kraken intervalos en minutos
+TIMEFRAMES = [
+    {"label": "1W",  "kraken": 10080, "weight": 6},
+    {"label": "1D",  "kraken": 1440,  "weight": 5},
+    {"label": "4H",  "kraken": 240,   "weight": 4},
+    {"label": "1H",  "kraken": 60,    "weight": 3},
+    {"label": "15M", "kraken": 15,    "weight": 2},
+    {"label": "5M",  "kraken": 5,     "weight": 1},
+]
+ 
 SCORE_THRESHOLD = 65
 STATE_FILE      = "last_state.json"
  
 # ── telegram ────────────────────────────────────────────────────
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Sin credenciales de Telegram")
+        print("  Sin credenciales de Telegram")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
@@ -33,27 +41,26 @@ def send_telegram(message):
     except Exception as e:
         print(f"  Error Telegram: {e}")
  
-# ── bybit ───────────────────────────────────────────────────────
-def fetch_klines(symbol, interval, limit=50):
-    url = "https://api.bybit.com/v5/market/kline"
-    params = {
-        "category": "spot",
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
-    }
-    r = requests.get(url, params=params, timeout=10)
+# ── kraken ───────────────────────────────────────────────────────
+def fetch_klines(pair, interval, limit=50):
+    url = "https://api.kraken.com/0/public/OHLC"
+    params = {"pair": pair, "interval": interval}
+    r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
  
-    if data.get("retCode") != 0:
-        raise Exception(f"Bybit error: {data.get('retMsg')}")
+    if data.get("error"):
+        raise Exception(f"Kraken error: {data['error']}")
  
-    # Bybit devuelve [startTime, open, high, low, close, volume, turnover]
-    # y los ordena del más reciente al más antiguo — invertimos
-    candles = data["result"]["list"]
-    candles = list(reversed(candles))
-    return [{"close": float(c[4]), "volume": float(c[5])} for c in candles]
+    # la respuesta tiene la clave del par (puede variar)
+    result = data["result"]
+    pair_key = [k for k in result.keys() if k != "last"][0]
+    candles = result[pair_key]
+ 
+    # Kraken: [time, open, high, low, close, vwap, volume, count]
+    # ya vienen ordenados del más antiguo al más reciente
+    candles = candles[-limit:]
+    return [{"close": float(c[4]), "volume": float(c[6])} for c in candles]
  
 # ── indicadores ─────────────────────────────────────────────────
 def ema(arr, period):
@@ -66,7 +73,7 @@ def ema(arr, period):
 def analyze_symbol(symbol):
     results = []
     for tf in TIMEFRAMES:
-        klines = fetch_klines(symbol, tf["bybit"], 50)
+        klines = fetch_klines(symbol["kraken"], tf["kraken"], 50)
         closes  = [k["close"]  for k in klines]
         volumes = [k["volume"] for k in klines]
  
@@ -103,7 +110,7 @@ def analyze_symbol(symbol):
             "weight": tf["weight"],
             "price":  closes[-1],
         })
-        time.sleep(0.1)
+        time.sleep(0.3)
     return results
  
 # ── score ───────────────────────────────────────────────────────
@@ -162,7 +169,7 @@ def main():
     alerts_sent = 0
  
     for symbol in SYMBOLS:
-        coin = symbol.replace("USDT", "")
+        coin = symbol["name"]
         print(f"Analizando {coin}...")
         try:
             analysis = analyze_symbol(symbol)
@@ -199,5 +206,4 @@ def main():
  
 if __name__ == "__main__":
     main()
- 
  
