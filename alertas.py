@@ -5,8 +5,8 @@ import time
 from datetime import datetime
  
 # ── config ─────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAE3tbdfxKXp1ZqKk6WgB8lzeBmo9oBrq2g")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8608919442")
  
 # Kraken usa pares distintos: XBT = BTC
 SYMBOLS = [
@@ -24,7 +24,7 @@ TIMEFRAMES = [
     {"label": "5M",  "kraken": 5,     "weight": 1},
 ]
  
-SCORE_THRESHOLD = 65
+SCORE_THRESHOLD = 0
 STATE_FILE      = "last_state.json"
  
 # ── telegram ────────────────────────────────────────────────────
