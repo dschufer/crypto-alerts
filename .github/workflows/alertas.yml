@@ -2,8 +2,11 @@ name: Crypto Alerts
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # cada 15 minutos
-  workflow_dispatch:         # permite correrlo manualmente desde GitHub
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   check-signals:
