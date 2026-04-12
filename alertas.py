@@ -5,7 +5,7 @@ import time
 from datetime import datetime
  
 # ── config ─────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAE3tbdfxKXp1ZqKk6WgB8lzeBmo9oBrq2g")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "AAE3tbdfxKXp1ZqKk6WgB8lzeBmo9oBrq2g")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8608919442")
  
 # Kraken usa pares distintos: XBT = BTC
