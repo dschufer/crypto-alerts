@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 # ── config ─────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAE3tbdfxKXp1ZqKk6WgB8lzeBmo9oBrq2g")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8608919442:AAE3tbdfxKXp1ZqKk6WgB8lzeBmo9oBrq2g")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "1259871459")
 
 SYMBOLS = [
@@ -65,8 +65,7 @@ def calc_levels(pair, direction, current_price):
     candles_1h = fetch_klines(pair, 60, 30)
     closes_1h  = [float(c[4]) for c in candles_1h]
     ema9_1h    = round(ema(closes_1h, 9), 2)
-
-    entry = ema9_1h
+    entry      = ema9_1h
 
     if direction == "LONG":
         stop   = round(entry * (1 - 0.008), 2)
@@ -100,6 +99,7 @@ def analyze_symbol(symbol):
         roc      = (closes[-1] - closes[-4]) / closes[-4] * 100 if n > 4 else 0
         roc_prev = (closes[-2] - closes[-5]) / closes[-5] * 100 if n > 5 else 0
         accel    = roc - roc_prev
+        pct      = (closes[-1] - closes[-2]) / closes[-2] * 100 if n > 1 else 0
 
         dir_ = "neu"
         if e9 > e21 * 1.001:
@@ -128,6 +128,7 @@ def analyze_symbol(symbol):
             "dir":    dir_,
             "vol":    vol,
             "mom":    mom,
+            "pct":    pct,
             "weight": tf["weight"],
             "price":  closes[-1],
         })
@@ -173,7 +174,7 @@ def tf_entry(score):
         return "5M o 15M"
     return "15M o 1H"
 
-def format_tfs(analysis):
+def format_tfs_detail(analysis):
     dir_icon = {"up": "🟢", "down": "🔴", "neu": "🟡"}
     mom_icon = {"uu": "↑↑", "ud": "↑↓", "dd": "↓↓", "du": "↓↑", "flat": "—"}
     lines = []
@@ -181,6 +182,16 @@ def format_tfs(analysis):
         d = dir_icon.get(r["dir"], "⚪")
         m = mom_icon.get(r["mom"], "—")
         lines.append(f"  {r['tf']:<4} {d}  vol:{r['vol']:<4}  {m}")
+    return "\n".join(lines)
+
+def format_tfs_summary(analysis):
+    dir_icon = {"up": "🟢", "down": "🔴", "neu": "🟡"}
+    lines = []
+    for r in analysis:
+        d   = dir_icon.get(r["dir"], "⚪")
+        pct = r["pct"]
+        sign = "+" if pct >= 0 else ""
+        lines.append(f"  {r['tf']:<4} {d}  {sign}{pct:.2f}%")
     return "\n".join(lines)
 
 # ── estado ───────────────────────────────────────────────────────
@@ -203,38 +214,41 @@ def main():
     last_state  = load_state()
     new_state   = dict(last_state)
 
-    resumen_lines = []
-    detail_blocks = []
+    summary_blocks = []
+    detail_blocks  = []
 
     for symbol in SYMBOLS:
         coin = symbol["name"]
         print(f"Analizando {coin}...")
         try:
-            analysis  = analyze_symbol(symbol)
-            score     = calc_score(analysis)
-            price     = analysis[0]["price"]
-            label     = signal_label(score)
+            analysis = analyze_symbol(symbol)
+            score    = calc_score(analysis)
+            price    = analysis[0]["price"]
+            label    = signal_label(score)
 
             print(f"  Score: {score:+d}  |  {label}")
 
             in_zone  = abs(score) >= SCORE_THRESHOLD
             was_zone = last_state.get(coin) is not None and abs(last_state[coin]) >= SCORE_THRESHOLD
 
-            # línea del resumen siempre
-            resumen_lines.append(f"{coin}  {label}  score: {score:+d}")
+            # bloque resumen siempre
+            summary_blocks.append(
+                f"<b>{coin}</b>  {label}  score: {score:+d}\n"
+                f"💰 ${price:,.2f}\n"
+                f"{format_tfs_summary(analysis)}"
+            )
 
-            # bloque de detalle solo si hay señal operable nueva
+            # bloque detalle solo si hay señal operable nueva
             if in_zone and not was_zone:
-                direction = "LONG" if score > 0 else "SHORT"
-                tf        = tf_entry(score)
+                direction   = "LONG" if score > 0 else "SHORT"
+                tf          = tf_entry(score)
+                action_word = "baje" if direction == "LONG" else "suba"
+                no_entrar   = "compres" if direction == "LONG" else "vendas"
 
                 try:
                     entry, stop, target, stop_pct, target_pct = calc_levels(
                         symbol["kraken"], direction, price
                     )
-                    action_word = "baje" if direction == "LONG" else "suba"
-                    no_entrar   = "compres" if direction == "LONG" else "vendas"
-
                     detail = (
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"<b>{label} — {coin}</b>\n\n"
@@ -248,27 +262,27 @@ def main():
                         f"⏱ Temporalidad  : <b>{tf}</b>\n\n"
                         f"⚠️ No {no_entrar} en ${price:,.2f}\n"
                         f"   Esperá que el precio {action_word} a ${entry:,.2f}\n\n"
-                        f"<b>Timeframes {coin}:</b>\n{format_tfs(analysis)}"
+                        f"<b>Timeframes {coin}:</b>\n{format_tfs_detail(analysis)}"
                     )
-                    detail_blocks.append(detail)
                 except Exception as e:
-                    detail_blocks.append(
+                    detail = (
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"<b>{label} — {coin}</b>\n"
                         f"💰 Precio: <b>${price:,.2f}</b>\n"
                         f"📊 Score: <b>{score:+d}/100</b>\n"
                         f"⏱ Temporalidad: <b>{tf}</b>\n"
-                        f"<b>Timeframes:</b>\n{format_tfs(analysis)}"
+                        f"<b>Timeframes:</b>\n{format_tfs_detail(analysis)}"
                     )
+                detail_blocks.append(detail)
 
             new_state[coin] = score if in_zone else None
 
         except Exception as e:
             print(f"  Error en {coin}: {e}")
-            resumen_lines.append(f"{coin}  ❌ Error")
+            summary_blocks.append(f"<b>{coin}</b>  ❌ Error al obtener datos")
 
-    # armar mensaje final
-    resumen = "\n".join(resumen_lines)
+    # armar mensaje
+    resumen  = "\n\n".join(summary_blocks)
     detalles = "\n\n".join(detail_blocks)
 
     if detalles:
