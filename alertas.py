@@ -181,7 +181,7 @@ def main():
  
             in_zone  = abs(score) >= SCORE_THRESHOLD
             #was_zone = last_state.get(coin) is not None and abs(last_state[coin]) >= SCORE_THRESHOLD
-         was_zone = False
+            was_zone = False
  
             if in_zone and not was_zone:
                 direction = "LONG" if score > 0 else "SHORT"
