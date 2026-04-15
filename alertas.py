@@ -14,18 +14,67 @@ SYMBOLS = [
 ]
 
 TIMEFRAMES = [
-    {"label": "1W",  "kraken": 10080, "weight": 6},
-    {"label": "1D",  "kraken": 1440,  "weight": 5},
-    {"label": "4H",  "kraken": 240,   "weight": 4},
-    {"label": "1H",  "kraken": 60,    "weight": 3},
-    {"label": "15M", "kraken": 15,    "weight": 2},
-    {"label": "5M",  "kraken": 5,     "weight": 1},
+    {"label": "1W",  "kraken": 10080},
+    {"label": "1D",  "kraken": 1440},
+    {"label": "4H",  "kraken": 240},
+    {"label": "1H",  "kraken": 60},
+    {"label": "15M", "kraken": 15},
+    {"label": "5M",  "kraken": 5},
 ]
 
-SCORE_STRONG    = 65   # comprar/vender ahora
-SCORE_MODERATE  = 35   # posible compra/venta
-SCORE_ACCEL     = 20   # puntos de cambio para alertar aceleración
-STATE_FILE      = "last_state.json"
+# ── pesos calibrados por análisis histórico ─────────────────────
+# Fuente: analisis.py con threshold 2%, 721 velas, 3 velas previas
+# Conclusión: volumen es el factor más predictivo
+# EMA tiene poco poder predictivo en diario
+# ROC y momentum son clave en 4H de BTC
+WEIGHTS = {
+    "BTC": {
+        "1D": {
+            "ema":    -0.028,   # EMA casi no predice en BTC diario
+            "vol":     0.189,   # volumen es lo más confiable
+            "mom":    -0.038,
+            "roc":    -0.042,
+        },
+        "4H": {
+            "ema":     0.009,
+            "vol":     0.189,
+            "mom":     0.269,   # momentum muy relevante en 4H
+            "roc":     0.340,   # ROC es el factor más predictivo en BTC 4H
+        },
+        # timeframes sin calibrar usan pesos por defecto
+        "default": {
+            "ema":  0.10,
+            "vol":  0.20,
+            "mom":  0.10,
+            "roc":  0.10,
+        },
+    },
+    "ETH": {
+        "1D": {
+            "ema":   -0.009,
+            "vol":    0.209,
+            "mom":   -0.043,
+            "roc":   -0.048,
+        },
+        "4H": {
+            "ema":   -0.081,   # EMA negativa en ETH 4H
+            "vol":    0.213,
+            "mom":    0.086,
+            "roc":    0.075,
+        },
+        "default": {
+            "ema":  0.10,
+            "vol":  0.20,
+            "mom":  0.10,
+            "roc":  0.10,
+        },
+    },
+}
+
+SCORE_STRONG   = 65
+SCORE_MODERATE = 35
+SCORE_ACCEL    = 20
+STATE_FILE     = "last_state.json"
 
 # ── telegram ────────────────────────────────────────────────────
 def send_telegram(message):
@@ -126,39 +175,57 @@ def analyze_symbol(symbol):
             mom = "du"
 
         results.append({
-            "tf":     tf["label"],
-            "dir":    dir_,
-            "vol":    vol,
-            "mom":    mom,
-            "pct":    pct,
-            "weight": tf["weight"],
-            "price":  closes[-1],
+            "tf":        tf["label"],
+            "dir":       dir_,
+            "vol":       vol,
+            "vol_ratio": vol_ratio,
+            "mom":       mom,
+            "roc":       roc,
+            "pct":       pct,
+            "price":     closes[-1],
         })
         time.sleep(0.3)
     return results
 
-# ── score ───────────────────────────────────────────────────────
-def calc_score(analysis):
-    total, max_total = 0, 0
+# ── score calibrado ──────────────────────────────────────────────
+def calc_score(analysis, coin):
+    coin_weights = WEIGHTS.get(coin, WEIGHTS["BTC"])
+    total = 0.0
+
     for r in analysis:
-        w = r["weight"]
-        max_total += w * 3
-        s = 0
+        tf_label = r["tf"]
+        w = coin_weights.get(tf_label, coin_weights["default"])
+
+        s = 0.0
+
+        # EMA — dirección
         if r["dir"] == "up":
-            s += w * 2
+            s += w["ema"] * 100
         elif r["dir"] == "down":
-            s -= w * 2
-        if r["dir"] != "neu":
-            if r["vol"] == "high":
-                s += (1 if r["dir"] == "up" else -1) * w
-            elif r["vol"] == "low":
-                s -= (0.3 if r["dir"] == "up" else -0.3) * w
-        if r["mom"] == "uu":
-            s += w * 0.5
-        elif r["mom"] == "dd":
-            s -= w * 0.5
+            s -= w["ema"] * 100
+
+        # volumen — amplifica si es alto
+        if r["vol"] == "high":
+            s += w["vol"] * 100 * (1 if r["dir"] == "up" else -1 if r["dir"] == "down" else 0)
+        elif r["vol"] == "low":
+            s -= w["vol"] * 30 * (1 if r["dir"] == "up" else -1 if r["dir"] == "down" else 0)
+
+        # momentum
+        if r["mom"] in ("uu",):
+            s += w["mom"] * 100
+        elif r["mom"] in ("dd",):
+            s -= w["mom"] * 100
+
+        # ROC
+        if r["roc"] > 0:
+            s += w["roc"] * 100
+        elif r["roc"] < 0:
+            s -= w["roc"] * 100  # doble negativo = suma cuando roc negativo
+
         total += s
-    return round((total / max_total) * 100)
+
+    # normalizar a -100/+100
+    return max(-100, min(100, round(total / len(analysis))))
 
 def signal_label(score):
     if score >= SCORE_STRONG:
@@ -202,34 +269,31 @@ def load_state():
         with open(STATE_FILE) as f:
             return json.load(f)
     except Exception:
-        return {"BTC": {"score": None, "alerted": None}, "ETH": {"score": None, "alerted": None}}
+        return {
+            "BTC": {"score": None, "alerted": None},
+            "ETH": {"score": None, "alerted": None},
+        }
 
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
 # ── lógica de alertas ────────────────────────────────────────────
-def should_alert(coin, score, last):
-    prev_score  = last.get("score")
+def should_alert(score, last):
+    prev_score   = last.get("score")
     prev_alerted = last.get("alerted")
 
-    # señal fuerte nueva
     if abs(score) >= SCORE_STRONG:
         if prev_alerted != "strong":
             return "strong"
-
-    # señal moderada nueva
     elif abs(score) >= SCORE_MODERATE:
         if prev_alerted not in ("strong", "moderate"):
             return "moderate"
-
-    # aceleración: score cambió más de SCORE_ACCEL puntos en la misma dirección
     elif prev_score is not None:
         delta = score - prev_score
         if abs(delta) >= SCORE_ACCEL and score * delta > 0:
             if prev_alerted != "accel":
                 return "accel"
-
     return None
 
 # ── main ─────────────────────────────────────────────────────────
@@ -237,9 +301,8 @@ def main():
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     print(f"\n=== Crypto Alert Check — {now} ===")
 
-    last_state = load_state()
-    new_state  = {}
-
+    last_state     = load_state()
+    new_state      = {}
     summary_blocks = []
     detail_blocks  = []
 
@@ -251,14 +314,14 @@ def main():
 
         try:
             analysis   = analyze_symbol(symbol)
-            score      = calc_score(analysis)
+            score      = calc_score(analysis, coin)
             price      = analysis[0]["price"]
             label      = signal_label(score)
             prev_score = last.get("score")
 
             print(f"  Score: {score:+d}  |  {label}")
 
-            alert_type = should_alert(coin, score, last)
+            alert_type = should_alert(score, last)
 
             # resumen siempre
             summary_blocks.append(
@@ -267,7 +330,6 @@ def main():
                 f"{format_tfs_summary(analysis)}"
             )
 
-            # detalle según tipo de alerta
             if alert_type == "strong":
                 direction   = "LONG" if score > 0 else "SHORT"
                 tf          = tf_entry(score)
@@ -339,7 +401,6 @@ def main():
                 new_state[coin] = {"score": score, "alerted": "accel"}
 
             else:
-                # sin alerta nueva, resetear alerted si score volvió a neutral
                 if abs(score) < SCORE_MODERATE:
                     new_state[coin] = {"score": score, "alerted": None}
                 else:
