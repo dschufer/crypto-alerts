@@ -22,8 +22,10 @@ TIMEFRAMES = [
     {"label": "5M",  "kraken": 5,     "weight": 1},
 ]
 
-SCORE_THRESHOLD = 65
-STATE_FILE = "last_state.json"
+SCORE_STRONG    = 65   # comprar/vender ahora
+SCORE_MODERATE  = 35   # posible compra/venta
+SCORE_ACCEL     = 20   # puntos de cambio para alertar aceleración
+STATE_FILE      = "last_state.json"
 
 # ── telegram ────────────────────────────────────────────────────
 def send_telegram(message):
@@ -159,13 +161,13 @@ def calc_score(analysis):
     return round((total / max_total) * 100)
 
 def signal_label(score):
-    if score >= 65:
+    if score >= SCORE_STRONG:
         return "🟢 COMPRAR AHORA"
-    if score >= 35:
+    if score >= SCORE_MODERATE:
         return "🟡 POSIBLE COMPRA"
-    if score <= -65:
+    if score <= -SCORE_STRONG:
         return "🔴 VENDER AHORA"
-    if score <= -35:
+    if score <= -SCORE_MODERATE:
         return "🟡 POSIBLE VENTA"
     return "⚪ NO OPERAR"
 
@@ -188,8 +190,8 @@ def format_tfs_summary(analysis):
     dir_icon = {"up": "🟢", "down": "🔴", "neu": "🟡"}
     lines = []
     for r in analysis:
-        d   = dir_icon.get(r["dir"], "⚪")
-        pct = r["pct"]
+        d    = dir_icon.get(r["dir"], "⚪")
+        pct  = r["pct"]
         sign = "+" if pct >= 0 else ""
         lines.append(f"  {r['tf']:<4} {d}  {sign}{pct:.2f}%")
     return "\n".join(lines)
@@ -200,19 +202,43 @@ def load_state():
         with open(STATE_FILE) as f:
             return json.load(f)
     except Exception:
-        return {"BTC": None, "ETH": None}
+        return {"BTC": {"score": None, "alerted": None}, "ETH": {"score": None, "alerted": None}}
 
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
+
+# ── lógica de alertas ────────────────────────────────────────────
+def should_alert(coin, score, last):
+    prev_score  = last.get("score")
+    prev_alerted = last.get("alerted")
+
+    # señal fuerte nueva
+    if abs(score) >= SCORE_STRONG:
+        if prev_alerted != "strong":
+            return "strong"
+
+    # señal moderada nueva
+    elif abs(score) >= SCORE_MODERATE:
+        if prev_alerted not in ("strong", "moderate"):
+            return "moderate"
+
+    # aceleración: score cambió más de SCORE_ACCEL puntos en la misma dirección
+    elif prev_score is not None:
+        delta = score - prev_score
+        if abs(delta) >= SCORE_ACCEL and score * delta > 0:
+            if prev_alerted != "accel":
+                return "accel"
+
+    return None
 
 # ── main ─────────────────────────────────────────────────────────
 def main():
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     print(f"\n=== Crypto Alert Check — {now} ===")
 
-    last_state  = load_state()
-    new_state   = dict(last_state)
+    last_state = load_state()
+    new_state  = {}
 
     summary_blocks = []
     detail_blocks  = []
@@ -220,26 +246,29 @@ def main():
     for symbol in SYMBOLS:
         coin = symbol["name"]
         print(f"Analizando {coin}...")
+
+        last = last_state.get(coin, {"score": None, "alerted": None})
+
         try:
-            analysis = analyze_symbol(symbol)
-            score    = calc_score(analysis)
-            price    = analysis[0]["price"]
-            label    = signal_label(score)
+            analysis   = analyze_symbol(symbol)
+            score      = calc_score(analysis)
+            price      = analysis[0]["price"]
+            label      = signal_label(score)
+            prev_score = last.get("score")
 
             print(f"  Score: {score:+d}  |  {label}")
 
-            in_zone  = abs(score) >= SCORE_THRESHOLD
-            was_zone = last_state.get(coin) is not None and abs(last_state[coin]) >= SCORE_THRESHOLD
+            alert_type = should_alert(coin, score, last)
 
-            # bloque resumen siempre
+            # resumen siempre
             summary_blocks.append(
                 f"<b>{coin}</b>  {label}  score: {score:+d}\n"
                 f"💰 ${price:,.2f}\n"
                 f"{format_tfs_summary(analysis)}"
             )
 
-            # bloque detalle solo si hay señal operable nueva
-            if in_zone and not was_zone:
+            # detalle según tipo de alerta
+            if alert_type == "strong":
                 direction   = "LONG" if score > 0 else "SHORT"
                 tf          = tf_entry(score)
                 action_word = "baje" if direction == "LONG" else "suba"
@@ -274,12 +303,52 @@ def main():
                         f"<b>Timeframes:</b>\n{format_tfs_detail(analysis)}"
                     )
                 detail_blocks.append(detail)
+                new_state[coin] = {"score": score, "alerted": "strong"}
 
-            new_state[coin] = score if in_zone else None
+            elif alert_type == "moderate":
+                direction = "LONG" if score > 0 else "SHORT"
+                tf        = tf_entry(score)
+                detail = (
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"<b>{label} — {coin}</b>\n\n"
+                    f"💰 Precio actual : <b>${price:,.2f}</b>\n"
+                    f"📊 Score         : <b>{score:+d}/100</b>\n"
+                    f"📍 Dirección     : <b>{direction}</b>\n"
+                    f"⏱ Temporalidad  : <b>{tf}</b>\n\n"
+                    f"⚠️ Señal moderada — esperá que el score suba a 65\n"
+                    f"   No entrés todavía\n\n"
+                    f"<b>Timeframes {coin}:</b>\n{format_tfs_detail(analysis)}"
+                )
+                detail_blocks.append(detail)
+                new_state[coin] = {"score": score, "alerted": "moderate"}
+
+            elif alert_type == "accel":
+                direction = "LONG" if score > 0 else "SHORT"
+                delta     = score - prev_score
+                detail = (
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ <b>SEÑAL FORMÁNDOSE — {coin}</b>\n\n"
+                    f"💰 Precio actual : <b>${price:,.2f}</b>\n"
+                    f"📊 Score         : <b>{prev_score:+d} → {score:+d}</b>  ({delta:+d} en 15 min)\n"
+                    f"📍 Dirección     : <b>{direction}</b>\n\n"
+                    f"👁 Empezá a vigilar el gráfico\n"
+                    f"   Todavía no entrés, esperá confirmación\n\n"
+                    f"<b>Timeframes {coin}:</b>\n{format_tfs_detail(analysis)}"
+                )
+                detail_blocks.append(detail)
+                new_state[coin] = {"score": score, "alerted": "accel"}
+
+            else:
+                # sin alerta nueva, resetear alerted si score volvió a neutral
+                if abs(score) < SCORE_MODERATE:
+                    new_state[coin] = {"score": score, "alerted": None}
+                else:
+                    new_state[coin] = {"score": score, "alerted": last.get("alerted")}
 
         except Exception as e:
             print(f"  Error en {coin}: {e}")
             summary_blocks.append(f"<b>{coin}</b>  ❌ Error al obtener datos")
+            new_state[coin] = last
 
     # armar mensaje
     resumen  = "\n\n".join(summary_blocks)
